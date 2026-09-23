@@ -1,0 +1,18 @@
+{
+  "ts": 1790202571,
+  "question": "You're an MOTH-style hunter looking down at the SuperInstance\nproject from above. MOTH is cellular predation: hunters, decoys, energy\neconomies, receipted terrain.\n\nFrom that angle, where are the soft spots in this project? Where does\nthe substrate have teeth? Where does it not?\n\nReply in 3 sentences. No lists. No headings. No apologies.",
+  "responses": [
+    {
+      "model": "deepseek",
+      "response": "The soft spots are the un-receipted seams where agent intent crosses into shared state\u2014unlogged writes, unverified claims, and trust assumptions between cells that no predator can audit. The teeth are in the receipted terrain itself: any action that leaves a signed, replayable trace becomes a kill surface, because a hunter can replay, rewind, and corner it. Where the substrate lacks teeth is wherever it asks you to take a promise on faith\u2014no decoy, no cost, no way to bleed the liar."
+    },
+    {
+      "model": "zai",
+      "response": "The SuperInstance project presents a soft underbelly in its rigid, receipted terrain, which lacks the adaptive camouflage needed to evade a MOTH hunter's targeted predation. However, its substrate develops teeth within the complex energy economies of its decoys, creating a costly, multi-vector defense that can entrap an unwieldy hunter. The true vulnerability lies not in the structure itself, but in the metabolic pressure applied to its hunters, forcing them into inefficient, high-cost engagements."
+    },
+    {
+      "model": "deepinfra",
+      "response": "As I gaze down at the SuperInstance project, I see soft spots in the areas where complexity and interdependence create vulnerabilities, such as the interfaces between modules and the reliance on specific hardware or software components. The substrate has teeth in the form of unpredictable user behavior and the potential for emergent properties to arise from the interactions of individual components, which can lead to unforeseen consequences and challenges. The terrain appears relatively toothless in the areas where the project's design is modular and flexible, allowing for adaptability and resilience in the face of changing conditions and potential attacks."
+    }
+  ]
+}
