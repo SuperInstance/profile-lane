@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { registerLanePredicates, buildWitness, checkWitness,
-  PREDICATE_NAME } from '../witness.mjs';
+  catchUpWitness, payloadForLine, PREDICATE_NAME } from '../witness.mjs';
 
 function fixture(dir, rows) {
   const ledger = join(dir, 'ledger.jsonl');
@@ -103,3 +103,128 @@ test('predicates are immutable: a swapped rule cannot wear the same name', () =>
   // Same body re-registers fine (idempotent — identity is not costume).
   assert.doesNotThrow(() => registerLanePredicates(predicates));
 });
+
+// --- catch-up: the tick hook -------------------------------------------------
+
+test('catch-up: appends only new rows, chain links hold', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'witness-'));
+  const ledger = fixture(dir, ROWS.slice(0, 3));
+  const witness = join(dir, 'memory.jsonl');
+  const predicates = registerLanePredicates();
+  buildWitness({ ledgerFile: ledger, witnessFile: witness, predicates });
+  const before = readFileSync(witness, 'utf8');
+
+  // Two more ticks land.
+  writeFileSync(ledger, ROWS.map(r => JSON.stringify(r)).join('\n') + '\n');
+  const r = catchUpWitness({ ledgerFile: ledger, witnessFile: witness,
+    predicates });
+  assert.equal(r.rebuilt, false);
+  assert.equal(r.added, 2);
+  assert.deepEqual(r.results.map(x => x.stored), [false, true]); // p3 refuse, p4 stitch
+  assert.match(r.results[0].detail, /unfinalized/);
+
+  // Chain is contiguous: the appended rows link onto the old tip.
+  assert.equal(r.layer.wal.rows.length, 5);
+  for (let i = 1; i < 5; i++) {
+    assert.equal(r.layer.wal.rows[i].prev_hash, r.layer.wal.rows[i - 1].hash);
+  }
+  assert.ok(r.layer.wal.verify().ok);
+  // The 3-row prefix is untouched; only 2 rows were appended.
+  const after = readFileSync(witness, 'utf8');
+  assert.ok(after.startsWith(before.trimEnd()),
+    'catch-up must append, never rewrite');
+  // Boot still re-judges the full chain.
+  const c = checkWitness({ witnessFile: witness, predicates });
+  assert.equal(c.ok, true);
+  assert.equal(c.rows, 5);
+  assert.equal(c.live, 2);
+});
+
+test('catch-up: no-op when the ledger is unchanged', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'witness-'));
+  const ledger = fixture(dir, ROWS);
+  const witness = join(dir, 'memory.jsonl');
+  const predicates = registerLanePredicates();
+  buildWitness({ ledgerFile: ledger, witnessFile: witness, predicates });
+  const before = readFileSync(witness, 'utf8');
+  const r = catchUpWitness({ ledgerFile: ledger, witnessFile: witness,
+    predicates });
+  assert.equal(r.rebuilt, false);
+  assert.equal(r.added, 0);
+  assert.deepEqual(r.results, []);
+  assert.equal(readFileSync(witness, 'utf8'), before,
+    'a no-op catch-up leaves the store byte-identical');
+});
+
+test('catch-up: no witness file rebuilds from scratch', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'witness-'));
+  const ledger = fixture(dir, ROWS.slice(0, 2));
+  const witness = join(dir, 'memory.jsonl');
+  const predicates = registerLanePredicates();
+  const r = catchUpWitness({ ledgerFile: ledger, witnessFile: witness,
+    predicates });
+  assert.equal(r.rebuilt, true);
+  assert.equal(r.added, 2);
+  assert.equal(r.layer.wal.rows.length, 2);
+  assert.ok(r.layer.wal.verify().ok);
+});
+
+test('catch-up: a shrunk ledger is refused (no-delete applies to the ledger too)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'witness-'));
+  const ledger = fixture(dir, ROWS);
+  const witness = join(dir, 'memory.jsonl');
+  const predicates = registerLanePredicates();
+  buildWitness({ ledgerFile: ledger, witnessFile: witness, predicates });
+  // The ledger loses its last two rows — deletion, not relocation.
+  writeFileSync(ledger, ROWS.slice(0, 3).map(r => JSON.stringify(r))
+    .join('\n') + '\n');
+  assert.throws(() => catchUpWitness({ ledgerFile: ledger,
+    witnessFile: witness, predicates }), /ledger shrank/);
+});
+
+test('catch-up: a verdict rewritten under the chain is refused', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'witness-'));
+  const ledger = fixture(dir, ROWS);
+  const witness = join(dir, 'memory.jsonl');
+  const predicates = registerLanePredicates();
+  buildWitness({ ledgerFile: ledger, witnessFile: witness, predicates });
+  // The attack from the other side: launder a refusal in the MUTABLE
+  // ledger, then catch up. The witnessed prefix no longer re-derives.
+  const tampered = ROWS.map(r => ({ ...r }));
+  tampered[1].verdict = '✔ STITCH';
+  writeFileSync(ledger, tampered.map(r => JSON.stringify(r))
+    .join('\n') + '\n');
+  assert.throws(() => catchUpWitness({ ledgerFile: ledger,
+    witnessFile: witness, predicates }), /rewritten under the chain/);
+  // And the witness file itself is untouched — refusal stores nothing.
+  const c = checkWitness({ witnessFile: witness, predicates });
+  assert.equal(c.ok, true);
+  assert.equal(c.rows, 5);
+});
+
+test('payloadForLine: canonical re-serialization matches the committed hash', () => {
+  // The chain commits fnv1a64(JSON.stringify(JSON.parse(line))) — the
+  // catch-up referee must re-derive exactly that, or honest rows get
+  // refused and rewritten ones get served.
+  const dir = mkdtempSync(join(tmpdir(), 'witness-'));
+  const rows = [{ ts: 9, patch: 'x', verdict: '✔ STITCH' }];
+  const ledger = fixture(dir, rows);
+  const witness = join(dir, 'memory.jsonl');
+  const predicates = registerLanePredicates();
+  const { layer } = buildWitness({ ledgerFile: ledger,
+    witnessFile: witness, predicates });
+  const line = readFileSync(ledger, 'utf8').split('\n')[0];
+  assert.equal(layer.wal.rows[0].payload_hash,
+    payloadHashOf(payloadForLine(line)));
+});
+
+function payloadHashOf(s) {
+  // Local re-derivation of the wal's hashing (fnv1a64 over UTF-8 bytes).
+  let h = 0xcbf29ce484222325n;
+  for (const b of new TextEncoder().encode(String(s))) {
+    h ^= BigInt(b);
+    h = (h * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return h.toString(16).padStart(16, '0');
+}
+
