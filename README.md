@@ -51,10 +51,18 @@ undetectably. `witness.mjs` replays the ledger through candor's
 gate-at-write (`vendor/candor/`, pin in `vendor/candor/PROVENANCE.md`):
 
 ```
-node witness.mjs           # build witness/memory.jsonl from ledger.jsonl
-node witness.mjs --check   # boot: re-verify chain + re-judge payloads
-node --test                # 5 regression pins (incl. tamper refusals)
+node witness.mjs             # build witness/memory.jsonl from ledger.jsonl
+node witness.mjs --check     # boot: re-verify chain + re-judge payloads
+node witness.mjs --catch-up  # witness only rows not yet in the chain
+node --test                  # 11 regression pins (incl. tamper refusals)
 ```
+
+`--tick` runs the catch-up itself after each row lands (best-effort;
+`PROFILE_LANE_NO_WITNESS=1` skips). catch-up is a referee, not just an
+appender: it re-derives the hash of every already-witnessed ledger row
+and refuses a shrunk or rewritten ledger loudly — the ledger cannot
+change under the chain any more than the chain can change under the
+ledger.
 
 Predicate = lane.py's promote rule verbatim: only a final `✔ STITCH`
 verdict admits a row. `✘ REFUSE` rows book a visible PREDICATE-REFUSAL
