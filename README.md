@@ -43,3 +43,32 @@ python3 lane.py --promote  # every N rounds
 - Lane lives at `lane.py` (228 lines, no deps beyond stdlib + `urllib`).
 - Ledger: one patch per line, JSONL.
 - Generated output: `out/next-readme.md`, candidate README for human review.
+
+## Witness (candor WAL)
+
+The ledger's rows are unchained — an auditor verdict can be rewritten
+undetectably. `witness.mjs` replays the ledger through candor's
+gate-at-write (`vendor/candor/`, pin in `vendor/candor/PROVENANCE.md`):
+
+```
+node witness.mjs             # build witness/memory.jsonl from ledger.jsonl
+node witness.mjs --check     # boot: re-verify chain + re-judge payloads
+node witness.mjs --catch-up  # witness only rows not yet in the chain
+node --test                  # 11 regression pins (incl. tamper refusals)
+```
+
+`--tick` runs the catch-up itself after each row lands (best-effort;
+`PROFILE_LANE_NO_WITNESS=1` skips). catch-up is a referee, not just an
+appender: it re-derives the hash of every already-witnessed ledger row
+and refuses a shrunk or rewritten ledger loudly — the ledger cannot
+change under the chain any more than the chain can change under the
+ledger.
+
+Predicate = lane.py's promote rule verbatim: only a final `✔ STITCH`
+verdict admits a row. `✘ REFUSE` rows book a visible PREDICATE-REFUSAL
+receipt carrying the auditor's reason; unfinalized think-blocks are
+refusals too (a predicate that cannot answer is not a pass). Refusals
+store no payload but stay in the chain as evidence — deleting one breaks
+the link at `--check`. Current ledger: 10 rows witnessed, 5 stitched,
+5 refused (4 unfinalized, 1 audited refusal: ts 1790195742, moth-ledger/
+quilt-port/moth-cells false-refuse — now hash-committed, re-judgeable).

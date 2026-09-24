@@ -17,18 +17,24 @@ Architecture: a "primitive quilt" of markdown patches between two cheap agents.
     out/next-readme.md.
 
 This is the long-running lane. Run it as:
-    python3 lane.py --tick   # one round, append to ledger
+    python3 lane.py --tick   # one round, append to ledger (+ witness)
     python3 lane.py --digest # pull GH fleet state, refresh fleet.json
     python3 lane.py --promote # merge surviving patches into a candidate README
     python3 lane.py --loop   # run --tick every N seconds (cron-friendly)
 
 The lane never overwrites the existing README without a human approve step.
 The candidate README is always in out/next-readme.md.
+
+The --tick witness hook runs `node witness.mjs --catch-up` after each row
+lands (append-only; refuses a shrunk/rewritten ledger loudly on stderr).
+Set PROFILE_LANE_NO_WITNESS=1 to skip it; the lane predates the witness
+and still runs where node is absent.
 """
 
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.request
@@ -86,6 +92,40 @@ def call_groq(prompt, max_tokens=400):
     with urllib.request.urlopen(req, timeout=30) as r:
         d = json.loads(r.read())
     return d["choices"][0]["message"]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Witness hook — every tick lands its ledger row in the candor chain too.
+# ---------------------------------------------------------------------------
+
+def witness_catch_up():
+    """Append the tick's new ledger row to the candor witness (best-effort).
+
+    witness.mjs --catch-up refuses loudly on a shrunk or rewritten ledger;
+    here that refusal is surfaced as WITNESS REFUSED on stderr without
+    killing the tick — the row is already in the ledger, and the next
+    --check / --catch-up surfaces the same refusal. Skip entirely with
+    PROFILE_LANE_NO_WITNESS=1 (or when node/witness.mjs is absent — the
+    lane predates the witness and must still run without it).
+    """
+    if os.environ.get("PROFILE_LANE_NO_WITNESS"):
+        return
+    if not (ROOT / "witness.mjs").exists():
+        return
+    try:
+        r = subprocess.run(
+            ["node", "witness.mjs", "--catch-up"],
+            cwd=ROOT, capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"witness: skipped ({e})", file=sys.stderr)
+        return
+    out = (r.stdout or "").strip()
+    if r.returncode != 0:
+        print(f"WITNESS REFUSED — ledger row is in ledger.jsonl but NOT "
+              f"in the chain:\n{out}\n{r.stderr or ''}", file=sys.stderr)
+    elif out:
+        print(f"witness: {out}")
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +261,10 @@ def tick(fleet):
     }
     with LEDGER.open("a") as f:
         f.write(json.dumps(row) + "\n")
+
+    # The witness is not a separate batch step: the row is chained as it
+    # lands. A refusal here is loud on stderr but does not kill the tick.
+    witness_catch_up()
 
     return row
 
